@@ -12,10 +12,8 @@ extern crate bincode;
 extern crate chrono;
 #[macro_use] extern crate failure;
 
-
 mod client;
 mod server;
-
 
 use std::mem;
 use std::str;
@@ -75,7 +73,7 @@ impl Pingstamp {
 /// The connection state of the ui.
 enum ConnectionState {
     ServerListening(Server),
-    ServerConnected(Server),
+    ServerConnected(Server, usize),
     Client(Client),
     None,
 }
@@ -168,6 +166,7 @@ impl ConsoleUi {
                 Server::new(ui.server_addr.clone(), ui.server_remote())),
         };
 
+        ui.output_line(format_args!("Welcome to HeadsUp chat!")).unwrap();
         ui.help();
         ui
     }
@@ -193,9 +192,11 @@ impl ConsoleUi {
 
     /// Prints the help message.
     fn help(&self) {
+        self.output_line(format_args!("")).unwrap();
         self.output_line(format_args!("Type '/connect' {{url}} to connect to a server.")).unwrap();
         self.output_line(format_args!("Type '/close' to close the current connection.")).unwrap();
         self.output_line(format_args!("Type '/exit' or press ctrl-q to quit.")).unwrap();
+        self.output_line(format_args!("")).unwrap();
     }
 
     /// Outputs the prompt.
@@ -205,9 +206,12 @@ impl ConsoleUi {
             termion::clear::CurrentLine,
         ).unwrap();
         match self.conn_state {
-            ConnectionState::ServerListening(ref s) => write!(self.stdout, "[ Listening on ({}) ]> ", s.url()),
-            ConnectionState::ServerConnected(ref s) => write!(self.stdout, "[ Connected as Server to ({}) ]> ", s.url()),
-            ConnectionState::Client(ref c) =>  write!(self.stdout, "[ Connected as Client to ({}) ]> ", c.url()),
+            ConnectionState::ServerListening(ref s) => write!(self.stdout,
+                "[ Listening on ({}) ]> ", s.url()),
+            ConnectionState::ServerConnected(_,  cnt) => write!(self.stdout,
+                "[ Connected as Server to {} clients ]> ", cnt),
+            ConnectionState::Client(ref c) =>  write!(self.stdout,
+                "[ Connected as Client to ({}) ]> ", c.url()),
             ConnectionState::None => write!(self.stdout, "[ Disconnected ]> "),
         }.unwrap();
         write!(self.stdout, "{}", line_buf).unwrap();
@@ -215,9 +219,25 @@ impl ConsoleUi {
     }
 
     /// Sets the connection state to `ServerListening`.
-    fn listen(&mut self) {
+    ///
+    /// Setting `decrement_count` to `true` reduces the server connection
+    /// count by one.
+    fn listen(&mut self, decrement_count: bool) {
         self.conn_state = match mem::replace(&mut self.conn_state, ConnectionState::None) {
-            ConnectionState::ServerConnected(s) => ConnectionState::ServerListening(s),
+            ConnectionState::ServerConnected(s, mut cnt) => {
+                if cnt == 0 {
+                    ConnectionState::ServerListening(s)
+                } else if cnt == 1 {
+                    if decrement_count {
+                        ConnectionState::ServerListening(s)
+                    } else {
+                        ConnectionState::ServerConnected(s, cnt)
+                    }
+                } else {
+                    if decrement_count { cnt -= 1; }
+                    ConnectionState::ServerConnected(s, cnt)
+                }
+            },
             ConnectionState::ServerListening(s) => ConnectionState::ServerListening(s),
             ConnectionState::Client(_) | ConnectionState::None => {
                 ConnectionState::ServerListening(
@@ -247,11 +267,13 @@ impl ConsoleUi {
                         }
                     } else if l.starts_with("/close") {
                         match self.conn_state {
-                            ConnectionState::Client(_) => {
-                                self.output_line(format_args!("Server connection closed.")).unwrap();
+                            ConnectionState::Client(ref c) => {
+                                self.output_line(format_args!("Closing connection to server...")).unwrap();
+                                c.close().unwrap();
                             },
-                            ConnectionState::ServerConnected(_) => {
-                                self.output_line(format_args!("Client connection closed.")).unwrap();
+                            ConnectionState::ServerConnected(ref s, cnt) => {
+                                self.output_line(format_args!("Closing {} client connections...", cnt)).unwrap();
+                                s.close_all().unwrap();
                             },
                             _ => self.output_line(format_args!("Not connected.")).unwrap(),
                         }
@@ -264,7 +286,7 @@ impl ConsoleUi {
                     }
                 } else {
                     match self.conn_state {
-                        ConnectionState::ServerConnected(ref server) => {
+                        ConnectionState::ServerConnected(ref server, _) => {
                             self.output_line(format_args!("{{You (Server)}}: {}", l)).unwrap();
                             server.send(l).unwrap();
                         },
@@ -289,11 +311,11 @@ impl ConsoleUi {
             match cmd {
                 UiCommand::MessageRecvd(m) => {
                     match self.conn_state {
-                        ConnectionState::ServerConnected(ref server) => {
-                            self.output_line(format_args!("{{Client ({})}}: {}", server.url(), m)).unwrap();
+                        ConnectionState::ServerConnected(_, _) => {
+                            self.output_line(format_args!("{{Client}}: {}", m)).unwrap();
                         },
-                        ConnectionState::Client(ref client) => {
-                            self.output_line(format_args!("{{Server ({})}}: {}", client.url(), m)).unwrap();
+                        ConnectionState::Client(_) => {
+                            self.output_line(format_args!("{{Server}}: {}", m)).unwrap();
                         },
                         ConnectionState::None | ConnectionState::ServerListening(..) => {
                             self.output_line(format_args!("{{Unknown}}: {}", m)).unwrap();
@@ -311,12 +333,14 @@ impl ConsoleUi {
                     if let Some(peer_addr) = shake.peer_addr {
                         match mem::replace(&mut self.conn_state, ConnectionState::None) {
                             ConnectionState::ServerListening(s) => {
-                                self.conn_state = ConnectionState::ServerConnected(s);
+                                self.conn_state = ConnectionState::ServerConnected(s, 1);
                             },
-                            ConnectionState::ServerConnected(s) => {
-                                self.output_line(format_args!("Multiple connections detected. \
-                                    Multiple client connections are not yet fully supported!", )).unwrap();
-                                self.conn_state = ConnectionState::ServerConnected(s);
+                            ConnectionState::ServerConnected(s, cnt) => {
+                                self.output_line(format_args!("Multiple connections detected ({}). \
+                                    Multiple client connections are not yet fully supported! \
+                                    Messages sent by clients only reach servers, not other clients.",
+                                    cnt + 1)).unwrap();
+                                self.conn_state = ConnectionState::ServerConnected(s, cnt + 1);
                             },
                             _ => panic!("Invalid connection state."),
                         }
@@ -336,21 +360,20 @@ impl ConsoleUi {
                 },
                 UiCommand::ClientClosed(_code, reason) => {
                     self.output_line(format_args!("Server connection closed. {}", reason)).unwrap();
-                    self.listen();
+                    self.listen(false);
 
                 },
                 UiCommand::ServerClosed(_code, reason) => {
                     self.output_line(format_args!("Client connection closed. {}", reason)).unwrap();
-                    self.listen();
+                    self.listen(true);
                 }
                 UiCommand::ClientError(err) => {
                     self.output_line(format_args!("The client has encountered an error: {}", err)).unwrap();
-                    self.listen();
-
+                    self.listen(true);
                 },
                 UiCommand::ServerError(err) => {
                     self.output_line(format_args!("The server has encountered an error: {}", err)).unwrap();
-                    self.listen();
+                    self.listen(true);
                 }
             }
         }

@@ -11,16 +11,17 @@ Ensure that [Rust](https://www.rust-lang.org/en-US/) is installed. Clone this re
 You can specify the IP and port to listen on by using the `--server` command line switch, e.g.:
 
 ```
-cargo run -- --server localhost::5000
+cargo run -- --server localhost:5000
 ```
 
 Use the `--client` switch to specify a server url to connect to upon startup:
 
 ```
-cargo run -- --server localhost::5000 --client cogciprocate.com:3030
+cargo run -- --server localhost:5000 --client cogciprocate.com:3030
 ```
 
-After launching, type `/help` at any time for a list of commands.
+After opening application, type `/connect {url}` to connect to a server. Type
+`/help` at any time for a complete list of commands.
 
 
 #### Problems?

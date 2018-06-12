@@ -115,4 +115,8 @@ impl Server {
         let ts: Vec<u8> = bincode::serialize(&Pingstamp::now()).unwrap();
         self.sender.send(msg).and(self.sender.send(ts))
     }
+
+    pub fn close_all(&self) -> Result<(), ws::Error>  {
+    	self.sender.close(CloseCode::Normal)
+    }
 }
