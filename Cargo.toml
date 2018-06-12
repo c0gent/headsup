@@ -1,0 +1,17 @@
+[package]
+name = "chat-ahrefs"
+version = "0.1.0"
+authors = ["c0gent <nsan1129@gmail.com>"]
+
+[dependencies]
+log = "0.4"
+env_logger = "0.5"
+clap = "2"
+ws = "0.7"
+url = "1"
+serde = "1"
+serde_derive = "1"
+bincode = "1"
+termion = { git = "https://github.com/redox-os/termion.git" }
+chrono = { version = "0.4", features = ["serde"] }
+failure = "0.1"
