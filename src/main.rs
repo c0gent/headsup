@@ -87,7 +87,7 @@ enum UiCommand {
     ClientClosed(CloseCode, String),
     ClientError(Error),
     MessageRecvd(String),
-    PongRecvd(DateTime<Utc>),
+    PongRecvd(chrono::Duration),
 }
 
 
@@ -126,8 +126,8 @@ impl UiRemote {
         self.cmd_tx.send(UiCommand::MessageRecvd(msg_text)).unwrap()
     }
 
-    pub fn pong_recvd(&self, ts: DateTime<Utc>) {
-        self.cmd_tx.send(UiCommand::PongRecvd(ts)).unwrap()
+    pub fn pong_recvd(&self, elapsed: chrono::Duration) {
+        self.cmd_tx.send(UiCommand::PongRecvd(elapsed)).unwrap()
     }
 }
 
@@ -260,7 +260,7 @@ impl ConsoleUi {
                                 self.conn_state = ConnectionState::Client(client);
                                 self.output_line(format_args!("Connecting to: {}...", url)).unwrap();
                             } else {
-                                panic!("Invalid client URL.");
+                                self.output_line(format_args!("Invalid client URL.")).unwrap();
                             }
                         } else {
                             self.output_line(format_args!("Already connected.")).unwrap();
@@ -322,8 +322,7 @@ impl ConsoleUi {
                         },
                     }
                 },
-                UiCommand::PongRecvd(ts) => {
-                    let elapsed = Utc::now().signed_duration_since(ts);
+                UiCommand::PongRecvd(elapsed) => {
                     let s = elapsed.num_seconds();
                     let ms = elapsed.num_milliseconds() - (s * 1000);
                     let us = elapsed.num_microseconds().map(|us| us - (s * 1000000)).unwrap_or(ms * 1000);

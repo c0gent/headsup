@@ -7,6 +7,7 @@ use std::net::{SocketAddr};
 use std::thread::{self, JoinHandle};
 use ws::{self, Sender as WsSender, WebSocket, Message, Handler, Handshake, CloseCode, Factory};
 use bincode;
+use chrono::Utc;
 use ::{UiRemote, Pingstamp};
 
 
@@ -41,7 +42,8 @@ impl Handler for ServerHandler {
                         self.output.send(bincode::serialize(&Pingstamp::Pong(ts)).unwrap())
                     },
                     Ok(Pingstamp::Pong(ts)) => {
-                        self.inner.lock().unwrap().ui_remote.pong_recvd(ts);
+                    	let elapsed = Utc::now().signed_duration_since(ts);
+                        self.inner.lock().unwrap().ui_remote.pong_recvd(elapsed);
                         Ok(())
                     }
                     Err(_err) => {
