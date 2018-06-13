@@ -1,21 +1,10 @@
 //! A websocket based chat client/server.
 //!
 //!
-//! ### `ws-rs` library problems:
-//!
-//! * There are some errors that are not propagated back out to the `on_error`
-//!   handler and that are only detectable when logging is enabled. (Relevant
-//!   issue: https://github.com/housleyjk/ws-rs/issues/155)
-//! * Some errors cause an internal panic rather than propagating an error.
-//!   One example is that a client can be running but is not yet connected.
-//!   When the user tries to close this connection, it causes an internal
-//!   panic that can not easily be squelched. No error is propagated. Further
-//!   investigation required before filing an issue.
 //!
 //!
 
-// #[macro_use] extern crate log;
-// extern crate env_logger;
+extern crate env_logger;
 #[macro_use] extern crate failure;
 extern crate url;
 extern crate clap;
@@ -597,6 +586,10 @@ impl ConsoleUi {
 
 
 fn main() {
+    // Unfortunately the `ws-rs` library does not properly propagate all
+    // errors. Logging must be enabled to see error detail for certain things.
+    env_logger::init();
+
     // Parse command line arguments:
     let matches = App::new("Heads-up Chat")
         .version("0.1.0")
