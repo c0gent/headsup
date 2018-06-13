@@ -97,7 +97,6 @@ impl Client {
             if let Err(err) = ws.run() {
                 ui_remote.client_error(err.into());
             }
-            trace!("Client closing.");
         })?;
 
         Ok(Client {

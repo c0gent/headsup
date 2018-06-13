@@ -1,8 +1,8 @@
 //! A websocket based chat client/server.
 //!
 
-#[macro_use] extern crate log;
-extern crate env_logger;
+// #[macro_use] extern crate log;
+// extern crate env_logger;
 #[macro_use] extern crate failure;
 extern crate url;
 extern crate clap;
@@ -278,7 +278,8 @@ impl ConsoleUi {
     /// Prints the help message.
     fn help(&self) -> Result <(), Error> {
         self.output_line(format_args!(""))?;
-        self.output_line(format_args!("Type '/connect' {{url}} to connect to a server."))?;
+        self.output_line(format_args!("Type '/open {{url}}' or '/connect {{url}}' \
+            to connect to a server."))?;
         self.output_line(format_args!("Type '/close' to close the current connection."))?;
         self.output_line(format_args!("Type '/exit' or press ctrl-q to quit."))?;
         self.output_line(format_args!(""))?;
@@ -428,7 +429,7 @@ impl ConsoleUi {
             "" => {},
             l @ _ => {
                 if l.starts_with("/") {
-                    if l.starts_with("/connect") {
+                    if l.starts_with("/open") || l.starts_with("/connect") {
                         self.connect(l)?;
                     } else if l.starts_with("/close") {
                         self.close_all()?;

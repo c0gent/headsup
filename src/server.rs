@@ -117,7 +117,6 @@ impl Server {
             if let Err(err) = ws.listen(&url_clone) {
             	ui_remote.server_error(err.into());
             }
-            trace!("Server closing.");
         })?;
 
         Ok(Server {
