@@ -1,10 +1,12 @@
 //! A websocket chat server.
 
-
+use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
 use std::str;
 use std::net::{SocketAddr};
 use std::thread::{self, JoinHandle};
-use ws::{self, Sender as WsSender, WebSocket, Message, Handler, Handshake, CloseCode, Factory};
+use ws::{self, Sender as WsSender, WebSocket, Message, Handler, Handshake, CloseCode, Factory,
+	util::Token};
 use bincode;
 use chrono::Utc;
 use ::{UiRemote, Pingstamp, Error};
@@ -14,6 +16,7 @@ use ::{UiRemote, Pingstamp, Error};
 struct ServerHandler {
 	ui_remote: UiRemote,
     output: WsSender,
+    clients: Arc<Mutex<BTreeMap<Token, WsSender>>>,
 }
 
 impl Handler for ServerHandler {
@@ -29,7 +32,15 @@ impl Handler for ServerHandler {
     fn on_message(&mut self, msg: Message) -> Result<(), ws::Error> {
         match msg {
             Message::Text(s) => {
-                self.ui_remote.message_recvd(s);
+                // Relay message to other connected clients:
+                let cls = self.clients.lock().unwrap();
+                for (token, sender) in cls.iter() {
+            		if token != &self.output.token() {
+            			let send = format!("Client<{}>: {}", usize::from(self.output.token()), s);
+            			sender.send(send)?;
+            		}
+            	}
+            	self.ui_remote.message_recvd(s, self.output.token());
                 Ok(())
             },
             Message::Binary(b) => {
@@ -63,13 +74,20 @@ impl Handler for ServerHandler {
 
 struct ServerHandlerFactory {
     ui_remote: UiRemote,
+    // `BTreeSet` because it's faster for a small N.
+    clients: Arc<Mutex<BTreeMap<Token, WsSender>>>,
 }
 
 impl Factory for ServerHandlerFactory {
     type Handler = ServerHandler;
 
     fn connection_made(&mut self, output: WsSender) -> Self::Handler {
-        ServerHandler { ui_remote: self.ui_remote.clone(), output }
+    	self.clients.lock().unwrap().insert(output.token(), output.clone());
+        ServerHandler {
+        	ui_remote: self.ui_remote.clone(),
+        	output,
+        	clients: self.clients.clone(),
+        }
     }
 }
 
@@ -84,7 +102,10 @@ pub struct Server {
 impl Server {
     pub fn new(url: SocketAddr, ui_remote: UiRemote) -> Result<Server, Error> {
     	let remote_clone = ui_remote.clone();
-        let factory = ServerHandlerFactory { ui_remote };
+        let factory = ServerHandlerFactory {
+        	ui_remote,
+        	clients: Arc::new(Mutex::new(BTreeMap::new())),
+    	};
         let ws = WebSocket::new(factory).map_err(Error::from)?;
         let url_clone = url.clone();
         let sender = ws.broadcaster();

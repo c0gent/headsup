@@ -30,7 +30,7 @@ impl Handler for ClientHandler {
     fn on_message(&mut self, msg: Message) -> Result<(), ws::Error> {
         match msg {
             Message::Text(s) => {
-                self.ui_remote.message_recvd(s);
+                self.ui_remote.message_recvd(s, self.output.token());
                 Ok(())
             },
             Message::Binary(b) => {

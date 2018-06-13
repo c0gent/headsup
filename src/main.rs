@@ -26,15 +26,13 @@ use std::sync::mpsc::{self, Sender as MpscSender, Receiver as MpscReceiver};
 use termion::{raw::{IntoRawMode, RawTerminal}, event::Key, input::TermRead};
 use clap::{App, Arg};
 use url::Url;
-use ws::{Handshake, CloseCode};
+use ws::{Handshake, CloseCode, util::Token};
 use chrono::{DateTime, Utc, serde::ts_nanoseconds};
 use client::Client;
 use server::Server;
 
 
 /// Errors.
-///
-/// TODO: Beef up error handling and explicitly handle more cases.
 #[derive(Debug, Fail)]
 pub enum Error {
     #[fail(display = "{}", _0)]
@@ -114,7 +112,7 @@ enum UiCommand {
     ClientOpened(Handshake),
     ClientClosed(CloseCode, String),
     ClientError(Error),
-    MessageRecvd(String),
+    MessageRecvd(String, Token),
     PongRecvd(chrono::Duration),
 }
 
@@ -150,8 +148,8 @@ impl UiRemote {
         self.cmd_tx.send(UiCommand::ClientError(err)).unwrap()
     }
 
-    pub fn message_recvd(&self, msg_text: String) {
-        self.cmd_tx.send(UiCommand::MessageRecvd(msg_text)).unwrap()
+    pub fn message_recvd(&self, msg_text: String, token: Token) {
+        self.cmd_tx.send(UiCommand::MessageRecvd(msg_text, token)).unwrap()
     }
 
     pub fn pong_recvd(&self, elapsed: chrono::Duration) {
@@ -361,13 +359,13 @@ impl ConsoleUi {
     fn handle_commands(&mut self) -> Result <(), Error> {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
-                UiCommand::MessageRecvd(m) => {
+                UiCommand::MessageRecvd(m, t) => {
                     match self.conn_state {
                         ConnectionState::ServerConnected(_, _) => {
-                            self.output_line(format_args!("{{Client}}: {}", m))?;
+                            self.output_line(format_args!("{{Client <{}>}}: {}", usize::from(t), m))?;
                         },
                         ConnectionState::Client(_) => {
-                            self.output_line(format_args!("{{Server}}: {}", m))?;
+                            self.output_line(format_args!("{{Server <{}>}}: {}", usize::from(t), m))?;
                         },
                         ConnectionState::None | ConnectionState::ServerListening(..) => {
                             self.output_line(format_args!("{{Unknown}}: {}", m))?;
