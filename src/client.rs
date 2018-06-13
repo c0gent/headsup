@@ -5,7 +5,8 @@ use std::str;
 use std::thread::{self, JoinHandle};
 use bincode;
 use url::Url;
-use ws::{self, Sender as WsSender, WebSocket, Message, Handler, Handshake, CloseCode, Factory};
+use ws::{self, Sender as WsSender, Message, Handler, Handshake, CloseCode, Factory,
+    Builder as WsBuilder, Settings};
 use chrono::Utc;
 use ::{UiRemote, Pingstamp, Error};
 
@@ -16,10 +17,9 @@ struct ClientHandler {
     output: WsSender,
 }
 
-
 impl Handler for ClientHandler {
     fn on_shutdown(&mut self) {
-
+        self.ui_remote.client_shutdown();
     }
 
     fn on_open(&mut self, shake: Handshake) -> Result<(), ws::Error> {
@@ -84,16 +84,28 @@ pub struct Client {
 
 impl Client {
     pub fn new(url: Url, ui_remote: UiRemote) -> Result<Client, Error> {
-        let remote_clone = ui_remote.clone();
-        let factory = ClientHandlerFactory { ui_remote };
-        let mut ws = WebSocket::new(factory)?;
+        let factory = ClientHandlerFactory { ui_remote: ui_remote.clone() };
+        let mut ws = WsBuilder::new()
+            .with_settings(Settings {
+                panic_on_new_connection: false,
+                panic_on_shutdown: false,
+                // Defaults to true:
+                panic_on_internal: false,
+                panic_on_capacity: false,
+                panic_on_protocol: false,
+                panic_on_encoding: false,
+                panic_on_queue: false,
+                panic_on_io: false,
+                panic_on_timeout: false,
+                ..Settings::default()
+            })
+            .build(factory)?;
         let sender = ws.broadcaster();
         ws.connect(url.clone())?;
 
         let _th = thread::Builder::new()
                 .name("chat-client".to_owned())
                 .spawn(move || {
-            let ui_remote = remote_clone;
             if let Err(err) = ws.run() {
                 ui_remote.client_error(err.into());
             }

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::str;
 use std::net::{SocketAddr};
 use std::thread::{self, JoinHandle};
-use ws::{self, Sender as WsSender, WebSocket, Message, Handler, Handshake, CloseCode, Factory,
-	util::Token};
+use ws::{self, Sender as WsSender, Message, Handler, Handshake, CloseCode, Factory,
+	util::Token, Builder as WsBuilder, Settings};
 use bincode;
 use chrono::Utc;
 use ::{UiRemote, Pingstamp, Error};
@@ -21,7 +21,7 @@ struct ServerHandler {
 
 impl Handler for ServerHandler {
     fn on_shutdown(&mut self) {
-
+        self.ui_remote.server_shutdown();
     }
 
     fn on_open(&mut self, shake: Handshake) -> Result<(), ws::Error> {
@@ -63,6 +63,9 @@ impl Handler for ServerHandler {
     }
 
     fn on_close(&mut self, code: CloseCode, reason: &str) {
+        let mut cls = self.clients.lock().unwrap();
+        // Remove sender for this connection from the master list:
+        cls.remove(&self.output.token());
     	self.ui_remote.server_closed(code, reason.to_owned());
     }
 
@@ -101,19 +104,31 @@ pub struct Server {
 
 impl Server {
     pub fn new(url: SocketAddr, ui_remote: UiRemote) -> Result<Server, Error> {
-    	let remote_clone = ui_remote.clone();
         let factory = ServerHandlerFactory {
-        	ui_remote,
+        	ui_remote: ui_remote.clone(),
         	clients: Arc::new(Mutex::new(BTreeMap::new())),
     	};
-        let ws = WebSocket::new(factory)?;
+        let ws = WsBuilder::new()
+            .with_settings(Settings {
+                panic_on_new_connection: false,
+                panic_on_shutdown: false,
+                // Defaults to true:
+                panic_on_internal: false,
+                panic_on_capacity: false,
+                panic_on_protocol: false,
+                panic_on_encoding: false,
+                panic_on_queue: false,
+                panic_on_io: false,
+                panic_on_timeout: false,
+                ..Settings::default()
+            })
+            .build(factory)?;
         let url_clone = url.clone();
         let sender = ws.broadcaster();
 
         let _th = thread::Builder::new()
                 .name("chat-server".to_owned())
                 .spawn(move || {
-        	let ui_remote = remote_clone;
             if let Err(err) = ws.listen(&url_clone) {
             	ui_remote.server_error(err.into());
             }

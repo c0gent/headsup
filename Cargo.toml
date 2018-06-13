@@ -6,7 +6,8 @@ authors = ["c0gent <nsan1129@gmail.com>"]
 [dependencies]
 env_logger = "0.5"
 clap = "2"
-ws = "0.7"
+# ws = "0.7"
+ws = { git = "https://github.com/c0gent/ws-rs.git" }
 url = "1"
 serde = "1"
 serde_derive = "1"

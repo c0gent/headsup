@@ -146,9 +146,11 @@ enum UiCommand {
     ServerOpened(Handshake),
     ServerClosed(CloseCode, String),
     ServerError(Error),
+    ServerShutdown,
     ClientOpened(Handshake),
     ClientClosed(CloseCode, String),
     ClientError(Error),
+    ClientShutdown,
     MessageRecvd(String, Token),
     PongRecvd(chrono::Duration),
 }
@@ -173,6 +175,10 @@ impl UiRemote {
         self.cmd_tx.send(UiCommand::ServerError(err)).unwrap()
     }
 
+    pub fn server_shutdown(&self) {
+        self.cmd_tx.send(UiCommand::ServerShutdown).unwrap()
+    }
+
     pub fn client_connected(&self, shake: Handshake) {
         self.cmd_tx.send(UiCommand::ClientOpened(shake)).unwrap()
     }
@@ -183,6 +189,10 @@ impl UiRemote {
 
     pub fn client_error(&self, err: Error) {
         self.cmd_tx.send(UiCommand::ClientError(err)).unwrap()
+    }
+
+    pub fn client_shutdown(&self) {
+        self.cmd_tx.send(UiCommand::ClientShutdown).unwrap()
     }
 
     pub fn message_recvd(&self, msg_text: String, token: Token) {
@@ -359,7 +369,8 @@ impl ConsoleUi {
     /// Connects to a server.
     fn connect<'l>(&mut self, l: &'l str) -> Result <(), Error> {
         if let ConnectionState::ServerListening(ref s) = self.conn_state {
-            s.shutdown()?;
+            // Squelch any errors:
+            s.shutdown().ok();
         }
         match self.conn_state {
             ConnectionState::ServerListening(_) | ConnectionState::None => {
@@ -375,7 +386,7 @@ impl ConsoleUi {
                     self.conn_state = ConnectionState::Client(client);
                     self.output_line(format_args!("Connecting to: {}...", url))?;
                 } else {
-                    self.output_line(format_args!("Invalid client URL."))?;
+                    self.output_line(format_args!("Invalid server URL."))?;
                 }
             },
             _ => self.output_line(format_args!("Already connected."))?,
@@ -505,7 +516,7 @@ impl ConsoleUi {
                 UiCommand::ServerClosed(_code, reason) => {
                     self.output_line(format_args!("Client connection closed. {}", reason))?;
                     self.close_connection(CloseOptions::Decrement)?;
-                }
+                },
                 UiCommand::ClientError(err) => {
                     self.output_line(format_args!("The client has encountered an error: {}", err))?;
                     self.close_connection(CloseOptions::Shutdown)?;
@@ -516,7 +527,7 @@ impl ConsoleUi {
                             ws::ErrorKind::Io(ref err) => match err.kind() {
                                 io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable => {
                                     self.server_addr = None;
-                                }
+                                },
                                 _ => {}
                             },
                             _ => {}
@@ -525,7 +536,10 @@ impl ConsoleUi {
                     }
                     self.output_line(format_args!("The server has encountered an error: {}", err))?;
                     self.close_connection(CloseOptions::Shutdown)?;
-                }
+                },
+                UiCommand::ServerShutdown | UiCommand::ClientShutdown => {
+                    self.close_connection(CloseOptions::Shutdown)?;
+                },
             }
         }
         Ok(())

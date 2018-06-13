@@ -41,8 +41,11 @@ problems or ask questions on the
   tries to close this connection, it causes a panic rather than
   propagating an error even though this is a very recoverable error.
   Further investigation required before filing an issue.
-* Conclusion: The `ws-rs` library is not yet robust enough to be used in a
-  production environment.
+  * UPDATE: Solved: Using [`ws::Builder`](https://ws-rs.org/api_docs/ws/struct.Builder.html)
+    and disabling the [`panic_on_internal`](https://ws-rs.org/api_docs/ws/struct.Settings.html#structfield.panic_on_internal) setting alleviates
+    this.
+* Conclusion: The `ws-rs` library may not quite be robust enough to be used in
+  a production environment, but is close.
 
 
 ##### License
