@@ -1,5 +1,18 @@
 //! A websocket based chat client/server.
 //!
+//!
+//! ### `ws-rs` library problems:
+//!
+//! * There are some errors that are not propagated back out to the `on_error`
+//!   handler and that are only detectable when logging is enabled. (Relevant
+//!   issue: https://github.com/housleyjk/ws-rs/issues/155)
+//! * Some errors cause an internal panic rather than propagating an error.
+//!   One example is that a client can be running but is not yet connected.
+//!   When the user tries to close this connection, it causes an internal
+//!   panic that can not easily be squelched. No error is propagated. Further
+//!   investigation required before filing an issue.
+//!
+//!
 
 // #[macro_use] extern crate log;
 // extern crate env_logger;
@@ -499,7 +512,6 @@ impl ConsoleUi {
                 UiCommand::ClientClosed(_code, reason) => {
                     self.output_line(format_args!("Server connection closed. {}", reason))?;
                     self.close_connection(CloseOptions::None)?;
-
                 },
                 UiCommand::ServerClosed(_code, reason) => {
                     self.output_line(format_args!("Client connection closed. {}", reason))?;
@@ -542,7 +554,9 @@ impl ConsoleUi {
         let mut stdin = termion::async_stdin().keys();
 
         loop {
-            self.handle_commands().unwrap();
+            if let Err(err) = self.handle_commands() {
+                self.output_line(format_args!("Error: {}", err))?;
+            }
 
             match stdin.next() {
                 Some(Ok(Key::Ctrl(c))) => {
@@ -582,7 +596,6 @@ impl ConsoleUi {
 }
 
 
-
 fn main() {
     // Parse command line arguments:
     let matches = App::new("Heads-up Chat")
@@ -607,8 +620,15 @@ fn main() {
     let server_addr = matches.value_of("SERVER").unwrap_or("localhost:3030").to_owned();
 
     // Address to connect to upon startup:
-    let client_addr = matches.value_of("CLIENT").as_ref()
-        .map(|c| Url::parse(&format!("ws:{}", c)).expect("Invalid client address"));
+    let client_addr = match matches.value_of("CLIENT").as_ref()
+            .map(|c| Url::parse(&format!("ws:{}", c))) {
+        Some(Ok(ca)) => Some(ca),
+        Some(Err(err)) => {
+            println!("Unable to parse client address: {}", err);
+            return;
+        },
+        None => None,
+    };
 
     // The user interface:
     let mut ui = match ConsoleUi::new(&server_addr, client_addr) {

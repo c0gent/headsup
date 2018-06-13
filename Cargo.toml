@@ -4,8 +4,8 @@ version = "0.1.0"
 authors = ["c0gent <nsan1129@gmail.com>"]
 
 [dependencies]
-log = "0.4"
-env_logger = "0.5"
+# log = "0.4"
+# env_logger = "0.5"
 clap = "2"
 ws = "0.7"
 url = "1"
