@@ -35,7 +35,9 @@ problems or ask questions on the
 
 * There are some errors that are not propagated back out to the `on_error`
   handler and that are only detectable when logging is enabled. (Relevant
-  issue: https://github.com/housleyjk/ws-rs/issues/155)
+  issue: https://github.com/housleyjk/ws-rs/issues/155).
+  * UPDATE: Further investigation has lead to the source of the unpropagated
+    error. See my comment in the above issue thread.
 * Some errors cause a panic rather than propagating an error. One example
   is that a client can be running but is not yet connected. When the user
   tries to close this connection, it causes a panic rather than
@@ -45,7 +47,7 @@ problems or ask questions on the
     and disabling the [`panic_on_internal`](https://ws-rs.org/api_docs/ws/struct.Settings.html#structfield.panic_on_internal) setting alleviates
     this.
 * Conclusion: The `ws-rs` library may not quite be robust enough to be used in
-  a production environment, but is close.
+  a production environment, but is probably close.
 
 
 ##### License
