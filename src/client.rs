@@ -66,7 +66,6 @@ struct ClientHandlerFactory {
     ui_remote: UiRemote
 }
 
-
 impl Factory for ClientHandlerFactory {
     type Handler = ClientHandler;
 
@@ -119,5 +118,10 @@ impl Client {
 
     pub fn close(&self) -> Result<(), Error>  {
         self.sender.close(CloseCode::Normal).map_err(Error::from)
+    }
+
+    #[allow(dead_code)]
+    pub fn shutdown(&self) -> Result<(), Error>  {
+        self.sender.shutdown().map_err(Error::from)
     }
 }

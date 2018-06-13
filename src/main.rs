@@ -3,6 +3,7 @@
 
 #[macro_use] extern crate log;
 extern crate env_logger;
+#[macro_use] extern crate failure;
 extern crate url;
 extern crate clap;
 extern crate ws;
@@ -10,7 +11,6 @@ extern crate termion;
 #[macro_use] extern crate serde_derive;
 extern crate bincode;
 extern crate chrono;
-#[macro_use] extern crate failure;
 
 mod client;
 mod server;
@@ -23,6 +23,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::io::{self, Write,};
 use std::thread;
 use std::sync::mpsc::{self, Sender as MpscSender, Receiver as MpscReceiver};
+use failure::Context;
 use termion::{raw::{IntoRawMode, RawTerminal}, event::Key, input::TermRead};
 use clap::{App, Arg};
 use url::Url;
@@ -32,9 +33,9 @@ use client::Client;
 use server::Server;
 
 
-/// Errors.
+/// Error Kinds.
 #[derive(Debug, Fail)]
-pub enum Error {
+pub enum ErrorKind {
     #[fail(display = "{}", _0)]
     Fmt(fmt::Error),
     #[fail(display = "{}", _0)]
@@ -49,37 +50,71 @@ pub enum Error {
     BadServerAddr(io::Error),
     #[fail(display = "Invalid client address: {}", _0)]
     BadClientAddr(io::Error),
+    #[fail(display = "No server address given.")]
+    NoServerAddr,
+}
+
+
+/// Errors.
+#[derive(Debug)]
+pub struct Error {
+    inner: Context<ErrorKind>,
+}
+
+impl Error {
+    pub fn new(kind: ErrorKind) -> Error {
+        Error { inner: Context::new(kind) }
+    }
+
+    pub fn kind(&self) -> &ErrorKind {
+        &self.inner.get_context()
+    }
+
+    pub fn bad_server_addr(err: io::Error) -> Error {
+        Error::new(ErrorKind::BadServerAddr(err))
+    }
+
+    pub fn no_server_addr() -> Error {
+        Error::new(ErrorKind::NoServerAddr)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.inner, f)
+    }
 }
 
 impl From<fmt::Error> for Error {
     fn from(err: fmt::Error) -> Error {
-        Error::Fmt(err)
+        Error::new(ErrorKind::Fmt(err))
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        Error::Io(err)
+        Error::new(ErrorKind::Io(err))
     }
 }
 
 impl From<ws::Error> for Error {
     fn from(err: ws::Error) -> Error {
-        Error::Ws(err)
+        Error::new(ErrorKind::Ws(err))
     }
 }
 
 impl From<url::ParseError> for Error {
     fn from(err: url::ParseError) -> Error {
-        Error::UrlParse(err)
+        Error::new(ErrorKind::UrlParse(err))
     }
 }
 
 impl From<Box<bincode::ErrorKind>> for Error {
     fn from(err: Box<bincode::ErrorKind>) -> Error {
-        Error::Bincode(err)
+        Error::new(ErrorKind::Bincode(err))
     }
 }
+
 
 
 /// Ping timestamp.
@@ -170,7 +205,8 @@ struct ConsoleUi {
     cmd_tx: MpscSender<UiCommand>,
     cmd_rx: MpscReceiver<UiCommand>,
     conn_state: ConnectionState,
-    server_addr: SocketAddr,
+    // If server address is bad it will be set to `None`:
+    server_addr: Option<SocketAddr>,
     // Must be stored to keep terminal in raw mode:
     stdout: RawTerminal<io::Stdout>,
     term_size: (u16, u16),
@@ -182,9 +218,9 @@ impl ConsoleUi {
     fn new<'s>(server_addr: &'s str, client_addr: Option<Url>) -> Result<ConsoleUi, Error> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        let server_addr = server_addr.to_socket_addrs()
-            .map_err(|err| Error::BadServerAddr(err))?
-            .nth(0).expect("Bad socket address");
+        let server_addr = Some(server_addr.to_socket_addrs()
+            .map_err(|err| Error::bad_server_addr(err))?
+            .nth(0).ok_or(Error::no_server_addr())?);
 
         let mut ui = ConsoleUi {
             cmd_tx,
@@ -197,10 +233,27 @@ impl ConsoleUi {
         };
 
         ui.conn_state = match client_addr {
-            Some(cl_addr) => ConnectionState::Client(
-                Client::new(cl_addr, ui.client_remote())?),
-            None => ConnectionState::ServerListening(
-                Server::new(ui.server_addr.clone(), ui.server_remote())?),
+            Some(cl_addr) => {
+                match Client::new(cl_addr.clone(), ui.remote()) {
+                    Ok(c) => ConnectionState::Client(c),
+                    Err(err) => {
+                        ui.output_line(format_args!("Error connecting to client address: {} ({})",
+                            cl_addr, err))?;
+                        ui.new_server()?
+                    },
+                }
+            },
+            None => {
+                match Server::new(ui.server_addr.clone().unwrap(), ui.remote()) {
+                    Ok(s) => ConnectionState::ServerListening(s),
+                    Err(err) => {
+                        ui.output_line(format_args!("Unable to connect to serve address: {} ({})",
+                            ui.server_addr.as_ref().unwrap(), err))?;
+                        ui.server_addr = None;
+                        ConnectionState::None
+                    },
+                }
+            },
         };
 
         ui.output_line(format_args!("Welcome to HeadsUp chat!"))?;
@@ -209,12 +262,7 @@ impl ConsoleUi {
     }
 
     /// Returns a new `UiRemote` which can send commands and receive events.
-    fn server_remote(&mut self) -> UiRemote {
-        UiRemote { cmd_tx: self.cmd_tx.clone() }
-    }
-
-    /// Returns a new `UiRemote` which can send commands and receive events.
-    fn client_remote(&mut self) -> UiRemote {
+    fn remote(&self) -> UiRemote {
         UiRemote { cmd_tx: self.cmd_tx.clone() }
     }
 
@@ -256,20 +304,30 @@ impl ConsoleUi {
         self.stdout.flush().map_err(Error::from)
     }
 
-    /// Sets the connection state to `ServerListening`.
-    ///
-    /// Setting `decrement_count` to `true` reduces the server connection
-    /// count by one.
+    /// If the stored server address is valid, returns a listening connection
+    /// state containing a new server.
+    fn new_server(&mut self) -> Result <ConnectionState, Error> {
+        Ok(match self.server_addr {
+            Some(ref sa) => {
+                ConnectionState::ServerListening(
+                    Server::new(sa.clone(), self.remote())?)
+            },
+            None => ConnectionState::None,
+        })
+    }
+
+    /// Sets the connection state as appropriate.
     fn close_connection(&mut self, options: CloseOptions) -> Result <(), Error> {
         self.conn_state = match mem::replace(&mut self.conn_state, ConnectionState::None) {
             ConnectionState::ServerConnected(s, cnt) => {
                 if cnt == 0 {
                     ConnectionState::ServerListening(s)
                 } else if cnt == 1 {
-                    if let CloseOptions::Decrement = options {
-                        ConnectionState::ServerListening(s)
-                    } else {
-                        ConnectionState::ServerConnected(s, cnt)
+                    match options {
+                        CloseOptions::None => ConnectionState::ServerConnected(s, cnt),
+                        CloseOptions::Decrement => ConnectionState::ServerListening(s),
+                        CloseOptions::Shutdown => self.new_server()?,
+
                     }
                 } else {
                     match options {
@@ -279,12 +337,88 @@ impl ConsoleUi {
                     }
                 }
             },
-            ConnectionState::ServerListening(s) => ConnectionState::ServerListening(s),
-            ConnectionState::Client(_) | ConnectionState::None => {
-                ConnectionState::ServerListening(
-                    Server::new(self.server_addr.clone(), self.server_remote())?)
+            ConnectionState::ServerListening(s) => {
+                match options {
+                    CloseOptions::Shutdown => self.new_server()?,
+                    _ => ConnectionState::ServerListening(s),
+                }
+            }
+            ConnectionState::Client(_c) => {
+                self.new_server()?
+            }
+            ConnectionState::None => {
+                self.new_server()?
             }
         };
+        Ok(())
+    }
+
+    /// Connects to a server.
+    fn connect<'l>(&mut self, l: &'l str) -> Result <(), Error> {
+        if let ConnectionState::ServerListening(ref s) = self.conn_state {
+            s.shutdown()?;
+        }
+        match self.conn_state {
+            ConnectionState::ServerListening(_) | ConnectionState::None => {
+                if let Some(url_str) = l.split(" ").nth(1) {
+                    let url = match Url::parse(&format!("ws:{}", url_str)) {
+                        Ok(u) => u,
+                        Err(_) => {
+                            self.output_line(format_args!("Invalid url: '{}'", url_str))?;
+                            return Ok(());
+                        },
+                    };
+                    let client = Client::new(url.clone(), self.remote())?;
+                    self.conn_state = ConnectionState::Client(client);
+                    self.output_line(format_args!("Connecting to: {}...", url))?;
+                } else {
+                    self.output_line(format_args!("Invalid client URL."))?;
+                }
+            },
+            _ => self.output_line(format_args!("Already connected."))?,
+        }
+        Ok(())
+    }
+
+    /// Closes all current connections.
+    fn close_all(&mut self) -> Result <(), Error> {
+        match self.conn_state {
+            ConnectionState::Client(ref c) => {
+                self.output_line(format_args!("Closing connection to server..."))?;
+                c.close()?;
+            },
+            ConnectionState::ServerConnected(ref s, cnt) => {
+                self.output_line(format_args!("Closing {} client connections...", cnt))?;
+                s.close_all()?;
+            },
+            _ => self.output_line(format_args!("Not connected."))?,
+        }
+        Ok(())
+    }
+
+    /// Sends a chat message.
+    fn send_message<'l>(&mut self, l: &'l str) -> Result <(), Error> {
+        let mut close_connection = false;
+        match self.conn_state {
+            ConnectionState::ServerConnected(ref server, _) => {
+                self.output_line(format_args!("{{You (Server)}}: {}", l))?;
+                if let Err(err) = server.send(l) {
+                    self.output_line(format_args!("Error sending message to client: {}", err))?;
+                    close_connection = true;
+                }
+            },
+            ConnectionState::Client(ref client) => {
+                self.output_line(format_args!("{{You (Client)}}: {}", l))?;
+                if let Err(err) = client.send(l) {
+                    self.output_line(format_args!("Error sending message to server: {}", err))?;
+                    close_connection = true;
+                }
+            },
+            ConnectionState::None | ConnectionState::ServerListening(..) => {
+                self.output_line(format_args!("Cannot send message: '{}'. Not connected.", l))?;
+            },
+        }
+        if close_connection { self.close_connection(CloseOptions::Decrement)?; }
         Ok(())
     }
 
@@ -295,30 +429,9 @@ impl ConsoleUi {
             l @ _ => {
                 if l.starts_with("/") {
                     if l.starts_with("/connect") {
-                        if let ConnectionState::ServerListening(_) = self.conn_state {
-                            if let Some(url) = l.split(" ").nth(1) {
-                                let url = Url::parse(&format!("ws:{}", url))?;
-                                let client = Client::new(url.clone(), self.client_remote())?;
-                                self.conn_state = ConnectionState::Client(client);
-                                self.output_line(format_args!("Connecting to: {}...", url))?;
-                            } else {
-                                self.output_line(format_args!("Invalid client URL."))?;
-                            }
-                        } else {
-                            self.output_line(format_args!("Already connected."))?;
-                        }
+                        self.connect(l)?;
                     } else if l.starts_with("/close") {
-                        match self.conn_state {
-                            ConnectionState::Client(ref c) => {
-                                self.output_line(format_args!("Closing connection to server..."))?;
-                                c.close()?;
-                            },
-                            ConnectionState::ServerConnected(ref s, cnt) => {
-                                self.output_line(format_args!("Closing {} client connections...", cnt))?;
-                                s.close_all()?;
-                            },
-                            _ => self.output_line(format_args!("Not connected."))?,
-                        }
+                        self.close_all()?;
                     } else if l.starts_with("/exit") {
                         self.exit = true;
                     } else if l.starts_with("/help") {
@@ -327,31 +440,10 @@ impl ConsoleUi {
                         self.output_line(format_args!("Unknown command."))?;
                     }
                 } else {
-                    let mut close_connection = false;
-                    match self.conn_state {
-                        ConnectionState::ServerConnected(ref server, _) => {
-                            self.output_line(format_args!("{{You (Server)}}: {}", l))?;
-                            if let Err(err) = server.send(l) {
-                                self.output_line(format_args!("Error sending message to client: {}", err))?;
-                                close_connection = true;
-                            }
-                        },
-                        ConnectionState::Client(ref client) => {
-                            self.output_line(format_args!("{{You (Client)}}: {}", l))?;
-                            if let Err(err) = client.send(l) {
-                                self.output_line(format_args!("Error sending message to server: {}", err))?;
-                                close_connection = true;
-                            }
-                        },
-                        ConnectionState::None | ConnectionState::ServerListening(..) => {
-                            self.output_line(format_args!("Cannot send message: '{}'. Not connected.", l))?;
-                        },
-                    }
-                    if close_connection { self.close_connection(CloseOptions::Decrement)?; }
+                    self.send_message(l)?;
                 }
             }
         }
-
         self.stdout.flush().map_err(Error::from)
     }
 
@@ -362,10 +454,10 @@ impl ConsoleUi {
                 UiCommand::MessageRecvd(m, t) => {
                     match self.conn_state {
                         ConnectionState::ServerConnected(_, _) => {
-                            self.output_line(format_args!("{{Client <{}>}}: {}", usize::from(t), m))?;
+                            self.output_line(format_args!("{{Client<{}>}}: {}", usize::from(t), m))?;
                         },
                         ConnectionState::Client(_) => {
-                            self.output_line(format_args!("{{Server <{}>}}: {}", usize::from(t), m))?;
+                            self.output_line(format_args!("{{Server<{}>}}: {}", usize::from(t), m))?;
                         },
                         ConnectionState::None | ConnectionState::ServerListening(..) => {
                             self.output_line(format_args!("{{Unknown}}: {}", m))?;
@@ -385,10 +477,6 @@ impl ConsoleUi {
                                 self.conn_state = ConnectionState::ServerConnected(s, 1);
                             },
                             ConnectionState::ServerConnected(s, cnt) => {
-                                self.output_line(format_args!("Multiple connections detected ({}). \
-                                    Multiple client connections are not yet fully supported! \
-                                    Messages sent by clients only reach servers, not other clients.",
-                                    cnt + 1))?;
                                 self.conn_state = ConnectionState::ServerConnected(s, cnt + 1);
                             },
                             _ => panic!("Invalid connection state."),
@@ -421,6 +509,18 @@ impl ConsoleUi {
                     self.close_connection(CloseOptions::Shutdown)?;
                 },
                 UiCommand::ServerError(err) => {
+                    match err.kind() {
+                        ErrorKind::Ws(ref err) => match err.kind {
+                            ws::ErrorKind::Io(ref err) => match err.kind() {
+                                io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable => {
+                                    self.server_addr = None;
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        },
+                        _ => {},
+                    }
                     self.output_line(format_args!("The server has encountered an error: {}", err))?;
                     self.close_connection(CloseOptions::Shutdown)?;
                 }
@@ -429,7 +529,7 @@ impl ConsoleUi {
         Ok(())
     }
 
-    /// Loops, handling events, until exit.
+    /// Loops, handling events until exit.
     fn run(&mut self) -> Result <(), Error> {
         // Hide cursor and move to lower left of terminal:
         write!(self.stdout.lock().into_raw_mode()?, "{}{}",
@@ -441,7 +541,7 @@ impl ConsoleUi {
         let mut stdin = termion::async_stdin().keys();
 
         loop {
-            self.handle_commands()?;
+            self.handle_commands().unwrap();
 
             match stdin.next() {
                 Some(Ok(Key::Ctrl(c))) => {
@@ -483,8 +583,6 @@ impl ConsoleUi {
 
 
 fn main() {
-    env_logger::init();
-
     // Parse command line arguments:
     let matches = App::new("Heads-up Chat")
         .version("0.1.0")
@@ -509,12 +607,21 @@ fn main() {
 
     // Address to connect to upon startup:
     let client_addr = matches.value_of("CLIENT").as_ref()
-        .map(|c| Url::parse(&format!("ws:{}", c)).expect("Invalid client address: "));
+        .map(|c| Url::parse(&format!("ws:{}", c)).expect("Invalid client address"));
 
     // The user interface:
-    let mut ui = ConsoleUi::new(&server_addr, client_addr)
-        .map_err(|err| panic!("ConsoleUI creation error: {}", err)).unwrap();
+    let mut ui = match ConsoleUi::new(&server_addr, client_addr) {
+        Ok(c) => c,
+        Err(err) => {
+            match err.kind() {
+                ErrorKind::BadServerAddr(_) => println!("Invalid server address: '{}'", server_addr),
+                ErrorKind::BadClientAddr(_) => println!("Invalid client address: '{}'", server_addr),
+                _ => panic!("{}", err),
+            }
+            return;
+        },
+    };
 
     // Run UI:
-    ui.run().map_err(|err| panic!("{}", err)).unwrap();
+    ui.run().unwrap();
 }

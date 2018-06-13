@@ -106,7 +106,7 @@ impl Server {
         	ui_remote,
         	clients: Arc::new(Mutex::new(BTreeMap::new())),
     	};
-        let ws = WebSocket::new(factory).map_err(Error::from)?;
+        let ws = WebSocket::new(factory)?;
         let url_clone = url.clone();
         let sender = ws.broadcaster();
 
@@ -138,5 +138,10 @@ impl Server {
 
     pub fn close_all(&self) -> Result<(), Error>  {
     	self.sender.close(CloseCode::Normal).map_err(Error::from)
+    }
+
+    #[allow(dead_code)]
+    pub fn shutdown(&self) -> Result<(), Error>  {
+        self.sender.shutdown().map_err(Error::from)
     }
 }
