@@ -1,6 +1,5 @@
 //! A websocket chat client.
 
-
 use std::str;
 use std::thread::{self, JoinHandle};
 use bincode;
@@ -87,16 +86,8 @@ impl Client {
         let factory = ClientHandlerFactory { ui_remote: ui_remote.clone() };
         let mut ws = WsBuilder::new()
             .with_settings(Settings {
-                panic_on_new_connection: false,
-                panic_on_shutdown: false,
                 // Defaults to true:
                 panic_on_internal: false,
-                panic_on_capacity: false,
-                panic_on_protocol: false,
-                panic_on_encoding: false,
-                panic_on_queue: false,
-                panic_on_io: false,
-                panic_on_timeout: false,
                 ..Settings::default()
             })
             .build(factory)?;

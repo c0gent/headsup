@@ -31,7 +31,7 @@ problems or ask questions on the
 [Issues](https://github.com/c0gent/headsup/issues) page.
 
 
-#### `ws-rs` Library Problems:
+#### [`ws-rs`](https://github.com/housleyjk/ws-rs) Library Notes/Problems:
 
 * There are some errors that are not propagated back out to the `on_error`
   handler and that are only detectable when logging is enabled. (Relevant
@@ -46,8 +46,8 @@ problems or ask questions on the
   * UPDATE: Solved: Using [`ws::Builder`](https://ws-rs.org/api_docs/ws/struct.Builder.html)
     and disabling the [`panic_on_internal`](https://ws-rs.org/api_docs/ws/struct.Settings.html#structfield.panic_on_internal) setting alleviates
     this.
-* Conclusion: The `ws-rs` library may not quite be robust enough to be used in
-  a production environment, but is probably close.
+* Conclusion: The ws-rs library isn't quite robust enough to be used in a
+  production environment, but it's probably close.
 
 
 ##### License
